@@ -1,14 +1,16 @@
 """
-Kanji Database System for Japanese Custom Tokenizer
+Optimized Kanji Database System for Japanese Custom Tokenizer
 
-This module provides a comprehensive kanji database with semantic radicals,
-component mappings, and frequency data for the top 2,000 most frequent kanji.
+This module provides a comprehensive kanji database with JSON file-based storage,
+efficient caching, batch processing, and comprehensive error handling.
 """
 
 import json
 import os
-from typing import Dict, List, Optional, Tuple
+import time
+from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
+from threading import Lock
 
 # Import logging utilities
 try:
@@ -20,157 +22,207 @@ except ImportError:
         return logging.getLogger(name)
 
 
-class KanjiDatabase:
+class OptimizedKanjiDatabase:
     """
-    Database system for kanji semantic analysis.
+    Optimized database system for kanji semantic analysis.
     
     Features:
-    - Top 2,000 frequent kanji with semantic information
-    - 214 semantic radicals mapping
-    - Component analysis for unknown word inference
-    - Frequency-based optimization
+    - JSON file-based storage with efficient loading
+    - LRU caching system for performance
+    - Batch processing capabilities
+    - Comprehensive error handling and validation
+    - Memory-efficient data structures
     """
     
-    def __init__(self, db_path: str = "data/kanji_database.json"):
+    def __init__(self, db_path: str = "data/kanji_database.json", cache_size: int = 1000):
         self.db_path = db_path
+        self.cache_size = cache_size
+        
+        # Data storage
         self.kanji_data = {}
-        self.radicals = {}
-        self.components = {}
-        self.frequency_rank = {}
+        self.radicals_data = {}
+        self.component_mapping = {}
+        self.frequency_rankings = {}
+        self.metadata = {}
+        
+        # Caching system
+        self._cache = {}
+        self._cache_order = []
+        self._cache_lock = Lock()
+        
+        # Statistics
+        self.stats = {
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'total_requests': 0,
+            'load_time': 0.0
+        }
         
         # Initialize logger
         self.logger = get_logger('kanji_database')
-        self.logger.info(f"Initializing KanjiDatabase with path: {db_path}")
+        self.logger.info(f"Initializing OptimizedKanjiDatabase with path: {db_path}")
         
-        # Initialize database
+        # Load database
         self._load_database()
     
     def _load_database(self):
-        """Load kanji database from JSON file or create default structure."""
-        if os.path.exists(self.db_path):
-            self.logger.info(f"Loading existing database from {self.db_path}")
-            try:
-                with open(self.db_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.kanji_data = data.get('kanji', {})
-                    self.radicals = data.get('radicals', {})
-                    self.components = data.get('components', {})
-                    self.frequency_rank = data.get('frequency_rank', {})
-                self.logger.info(f"Database loaded: {len(self.kanji_data)} kanji, {len(self.radicals)} radicals")
-            except Exception as e:
-                self.logger.error(f"Error loading database: {e}")
-                self._create_default_database()
-        else:
-            self.logger.info("Database file not found, creating default database")
-            self._create_default_database()
+        """Load kanji database from JSON file with comprehensive error handling."""
+        start_time = time.time()
+        
+        if not os.path.exists(self.db_path):
+            self.logger.error(f"Database file not found: {self.db_path}")
+            self._create_fallback_database()
+            return
+        
+        try:
+            self.logger.info(f"Loading database from {self.db_path}")
+            with open(self.db_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # Load sections with validation
+            self.metadata = data.get('metadata', {})
+            self.kanji_data = data.get('kanji', {})
+            self.radicals_data = data.get('radicals', {})
+            self.component_mapping = data.get('component_mapping', {})
+            self.frequency_rankings = data.get('frequency_rankings', {})
+            
+            # Validate loaded data
+            self._validate_loaded_data()
+            
+            load_time = time.time() - start_time
+            self.stats['load_time'] = load_time
+            
+            self.logger.info(f"Database loaded successfully: {len(self.kanji_data)} kanji, "
+                           f"{len(self.radicals_data)} radicals in {load_time:.3f}s")
+            
+        except json.JSONDecodeError as e:
+            self.logger.error(f"JSON decode error: {e}")
+            self._create_fallback_database()
+        except Exception as e:
+            self.logger.error(f"Error loading database: {e}")
+            self._create_fallback_database()
     
-    def _create_default_database(self):
-        """Create default kanji database with top 2,000 frequent kanji."""
-        # Top 2,000 most frequent kanji with semantic information
+    def _validate_loaded_data(self):
+        """Validate loaded database data."""
+        if not self.kanji_data:
+            raise ValueError("No kanji data loaded")
+        
+        if not self.metadata:
+            self.logger.warning("No metadata found in database")
+        
+        # Check for required fields in kanji entries
+        required_fields = ['radical', 'meanings', 'frequency_rank']
+        for kanji, data in self.kanji_data.items():
+            for field in required_fields:
+                if field not in data:
+                    self.logger.warning(f"Missing field '{field}' in kanji '{kanji}'")
+    
+    def _create_fallback_database(self):
+        """Create fallback database with essential data."""
+        self.logger.info("Creating fallback database with essential kanji")
+        
+        # Essential kanji data
         self.kanji_data = {
-            # High frequency kanji with detailed semantic data
             "人": {
                 "radical": "人",
-                "components": ["人"],
-                "meanings": ["person", "human", "people"],
-                "semantic_field": "human",
+                "meanings": ["person", "human"],
                 "frequency_rank": 1,
-                "common_compounds": ["人間", "人口", "人物", "人気"]
+                "components": ["人"],
+                "semantic_field": "human"
             },
             "大": {
                 "radical": "大", 
-                "components": ["大"],
-                "meanings": ["big", "large", "great"],
-                "semantic_field": "size",
+                "meanings": ["big", "large"],
                 "frequency_rank": 2,
-                "common_compounds": ["大学", "大切", "大きい", "大人"]
-            },
-            "年": {
-                "radical": "干",
-                "components": ["干", "丨"],
-                "meanings": ["year", "age"],
-                "semantic_field": "time",
-                "frequency_rank": 3,
-                "common_compounds": ["今年", "去年", "年間", "年齢"]
-            },
-            "一": {
-                "radical": "一",
-                "components": ["一"],
-                "meanings": ["one", "first"],
-                "semantic_field": "number",
-                "frequency_rank": 4,
-                "common_compounds": ["一つ", "一人", "一番", "一日"]
-            },
-            "国": {
-                "radical": "囗",
-                "components": ["囗", "玉"],
-                "meanings": ["country", "nation"],
-                "semantic_field": "geography",
-                "frequency_rank": 5,
-                "common_compounds": ["国家", "国際", "国内", "外国"]
+                "components": ["大"],
+                "semantic_field": "size"
             }
         }
         
-        # Semantic radicals (214 traditional radicals)
-        self.radicals = {
-            "人": {"meaning": "person", "variants": ["亻", "𠆢"]},
-            "大": {"meaning": "big", "variants": []},
-            "小": {"meaning": "small", "variants": []},
-            "口": {"meaning": "mouth", "variants": []},
-            "手": {"meaning": "hand", "variants": ["扌"]},
-            "心": {"meaning": "heart", "variants": ["忄", "⺗"]},
-            "水": {"meaning": "water", "variants": ["氵", "氺"]},
-            "火": {"meaning": "fire", "variants": ["灬"]},
-            "木": {"meaning": "tree", "variants": []},
-            "金": {"meaning": "metal", "variants": ["钅"]}
+        self.radicals_data = {
+            "人": {"meaning": "person", "variants": ["亻"]},
+            "大": {"meaning": "big", "variants": []}
         }
         
-        # Component mappings for analysis
-        self.components = {
-            "亻": "人",  # person radical
-            "扌": "手",  # hand radical
-            "氵": "水",  # water radical
-            "忄": "心",  # heart radical
-            "灬": "火",  # fire radical
-            "钅": "金"   # metal radical
+        self.metadata = {
+            "version": "fallback",
+            "total_kanji": len(self.kanji_data),
+            "source": "fallback"
         }
-        
-        # Save initial database
-        self._save_database()
-    
-    def _save_database(self):
-        """Save database to JSON file."""
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        data = {
-            "kanji": self.kanji_data,
-            "radicals": self.radicals,
-            "components": self.components,
-            "frequency_rank": self.frequency_rank
-        }
-        with open(self.db_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
     
     def get_kanji_info(self, kanji: str) -> Optional[Dict]:
-        """Get comprehensive information for a kanji character."""
-        result = self.kanji_data.get(kanji)
-        if result is None:
-            self.logger.debug(f"Kanji not found in database: {kanji}")
-        return result
+        """Get comprehensive information for a kanji character with caching."""
+        with self._cache_lock:
+            self.stats['total_requests'] += 1
+            
+            # Check cache first
+            if kanji in self._cache:
+                self.stats['cache_hits'] += 1
+                # Move to end (most recently used)
+                self._cache_order.remove(kanji)
+                self._cache_order.append(kanji)
+                return self._cache[kanji]
+            
+            # Cache miss
+            self.stats['cache_misses'] += 1
+            
+            # Get from database
+            result = self.kanji_data.get(kanji)
+            if result is None:
+                self.logger.debug(f"Kanji not found in database: {kanji}")
+                return None
+            
+            # Add to cache with LRU eviction
+            self._add_to_cache(kanji, result)
+            return result
+    
+    def _add_to_cache(self, kanji: str, data: Dict):
+        """Add kanji data to cache with LRU eviction."""
+        if len(self._cache) >= self.cache_size:
+            # Remove least recently used
+            oldest = self._cache_order.pop(0)
+            del self._cache[oldest]
+        
+        self._cache[kanji] = data
+        self._cache_order.append(kanji)
+    
+    def batch_get_kanji_info(self, kanji_list: List[str]) -> Dict[str, Optional[Dict]]:
+        """Get information for multiple kanji efficiently."""
+        results = {}
+        
+        for kanji in kanji_list:
+            results[kanji] = self.get_kanji_info(kanji)
+        
+        return results
+    
+    def get_kanji_by_frequency(self, limit: int = 100) -> List[Tuple[str, Dict]]:
+        """Get kanji sorted by frequency."""
+        kanji_with_ranks = []
+        
+        for kanji, data in self.kanji_data.items():
+            rank = data.get('frequency_rank', 9999)
+            kanji_with_ranks.append((kanji, data, rank))
+        
+        # Sort by frequency rank (lower = more frequent)
+        kanji_with_ranks.sort(key=lambda x: x[2])
+        
+        return [(kanji, data) for kanji, data, _ in kanji_with_ranks[:limit]]
     
     def get_radical_info(self, radical: str) -> Optional[Dict]:
         """Get information about a semantic radical."""
-        return self.radicals.get(radical)
+        return self.radicals_data.get(radical)
     
     def analyze_components(self, kanji: str) -> List[str]:
         """Analyze kanji components for semantic inference."""
-        if kanji in self.kanji_data:
-            return self.kanji_data[kanji].get("components", [kanji])
+        info = self.get_kanji_info(kanji)
+        if info:
+            return info.get("components", [kanji])
         
         # For unknown kanji, try to identify components
         components = []
-        for component in self.components:
+        for component, radical in self.component_mapping.items():
             if component in kanji:
-                components.append(self.components[component])
+                components.append(radical)
         
         return components if components else [kanji]
     
@@ -182,15 +234,15 @@ class KanjiDatabase:
         
         # Infer from radical
         radical = self._identify_radical(kanji)
-        if radical in self.radicals:
-            return self.radicals[radical].get("meaning", "general")
+        if radical in self.radicals_data:
+            return self.radicals_data[radical].get("meaning", "general")
         
         return "unknown"
     
     def _identify_radical(self, kanji: str) -> str:
         """Identify the semantic radical of a kanji."""
         # Check common radical patterns
-        for component, radical in self.components.items():
+        for component, radical in self.component_mapping.items():
             if component in kanji:
                 return radical
         
@@ -245,11 +297,92 @@ class KanjiDatabase:
         similar.sort(key=lambda x: x[1], reverse=True)
         return similar[:max_results]
     
+    def validate_database(self) -> Dict[str, Any]:
+        """Validate database integrity and return validation results."""
+        validation_results = {
+            'is_valid': True,
+            'errors': [],
+            'warnings': [],
+            'statistics': {}
+        }
+        
+        # Check required sections
+        required_sections = ['kanji', 'radicals_data', 'component_mapping']
+        for section in required_sections:
+            if not hasattr(self, section) or not getattr(self, section):
+                validation_results['errors'].append(f"Missing or empty section: {section}")
+                validation_results['is_valid'] = False
+        
+        # Check kanji data quality
+        if self.kanji_data:
+            required_fields = ['radical', 'meanings', 'frequency_rank']
+            for kanji, data in self.kanji_data.items():
+                for field in required_fields:
+                    if field not in data:
+                        validation_results['warnings'].append(f"Missing field '{field}' in kanji '{kanji}'")
+        
+        # Statistics
+        validation_results['statistics'] = {
+            'total_kanji': len(self.kanji_data),
+            'total_radicals': len(self.radicals_data),
+            'cache_size': len(self._cache),
+            'cache_hit_rate': self.get_cache_hit_rate()
+        }
+        
+        return validation_results
+    
+    def get_cache_hit_rate(self) -> float:
+        """Get cache hit rate."""
+        total = self.stats['total_requests']
+        if total == 0:
+            return 0.0
+        return self.stats['cache_hits'] / total
+    
     def get_database_stats(self) -> Dict:
-        """Get database statistics."""
+        """Get comprehensive database statistics."""
         return {
+            "metadata": self.metadata,
             "total_kanji": len(self.kanji_data),
-            "total_radicals": len(self.radicals),
-            "total_components": len(self.components),
+            "total_radicals": len(self.radicals_data),
+            "total_components": len(self.component_mapping),
+            "cache_stats": {
+                "cache_size": len(self._cache),
+                "cache_hits": self.stats['cache_hits'],
+                "cache_misses": self.stats['cache_misses'],
+                "hit_rate": self.get_cache_hit_rate(),
+                "total_requests": self.stats['total_requests']
+            },
+            "performance": {
+                "load_time": self.stats['load_time']
+            },
             "coverage_estimate": "~97% of common Japanese text"
         }
+    
+    def clear_cache(self):
+        """Clear the cache."""
+        with self._cache_lock:
+            self._cache.clear()
+            self._cache_order.clear()
+            self.stats['cache_hits'] = 0
+            self.stats['cache_misses'] = 0
+            self.stats['total_requests'] = 0
+    
+    def export_database(self, output_path: str) -> None:
+        """Export database to a new file."""
+        data = {
+            "metadata": self.metadata,
+            "kanji": self.kanji_data,
+            "radicals": self.radicals_data,
+            "component_mapping": self.component_mapping,
+            "frequency_rankings": self.frequency_rankings
+        }
+        
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        self.logger.info(f"Database exported to {output_path}")
+
+
+# Backward compatibility alias
+KanjiDatabase = OptimizedKanjiDatabase
