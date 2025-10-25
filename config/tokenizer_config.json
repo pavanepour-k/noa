@@ -1,0 +1,35 @@
+{
+  "cache_system": {
+    "l1_capacity": 10000,
+    "l2_capacity": 2000,
+    "prefetch_enabled": true,
+    "max_access_patterns": 50000,
+    "max_prefetch_queue": 1000
+  },
+  "hybrid_tokenizer": {
+    "confidence_threshold": 0.7,
+    "fast_engine_weight": 0.6,
+    "context_engine_weight": 0.4
+  },
+  "context_engine": {
+    "context_window_size": 5,
+    "semantic_field_threshold": 0.3
+  },
+  "adaptive_learning": {
+    "min_pattern_frequency": 3,
+    "confidence_threshold": 0.7,
+    "max_memory_size": 10000,
+    "pattern_decay_factor": 0.95
+  },
+  "performance": {
+    "max_text_length": 100000,
+    "sentence_processing_target_ms": 50,
+    "cache_hit_rate_target": 0.85
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "file_logging": false,
+    "log_file": "tokenizer.log"
+  }
+}
